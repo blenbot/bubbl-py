@@ -94,15 +94,16 @@ def send_in_private(phone_number: str, message: str):
 
 
 class DBWatcher(FileSystemEventHandler):
-    def __init__(self, db: ChatDBClient, cache: InMemoryCache):
+    def __init__(self, db: ChatDBClient, cache: InMemoryCache, loop: asyncio.AbstractEventLoop):
         self.db = db
         self.cache = cache
+        self.loop = loop
 
     def on_modified(self, event):
         path = Path(str(event.src_path))
         if path.name not in ("chat.db", "chat.db-wal"):
             return
-        asyncio.get_event_loop().create_task(self._handle())
+        asyncio.run_coroutine_threadsafe(self._handle(), self.loop)
 
     async def _handle(self):
         for info in self.db.list_chats():
@@ -127,25 +128,23 @@ class DBWatcher(FileSystemEventHandler):
 
 
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    
+    loop = asyncio.get_event_loop()
+
     db_client = ChatDBClient(DB_PATH)
     cache = InMemoryCache()
     for info in db_client.list_chats():
         cache.set(info['guid'], info['last_rowid'])
 
-    watcher = DBWatcher(db_client, cache)
+    watcher = DBWatcher(db_client, cache, loop)
     observer = Observer()
     observer.schedule(watcher, str(DB_PATH.parent), recursive=False)
     observer.start()
-    app.state.db_client = db_client
-    app.state.cache = cache
+
     app.state.observer = observer
-
     yield
-
-    
     observer.stop()
     observer.join()
+
 
 app = FastAPI(lifespan=lifespan)
 
