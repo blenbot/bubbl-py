@@ -220,18 +220,17 @@ async def gen_plan(cid: str, history: str, parts: List[str]) -> str:
     return r.choices[0].message.content.strip()
 
 class DBWatcher(FileSystemEventHandler):
-    def __init__(self, db: ChatDBClient, cache: InMemoryCache):
+    def __init__(self, db: ChatDBClient, cache: InMemoryCache, loop: asyncio.AbstractEventLoop):
         self.db = db
         self.cache = cache
+        self.loop = loop
 
     def on_modified(self, event):
         if event.is_directory:
             return
         if Path(str(event.src_path)).name not in ("chat.db", "chat.db-wal"):
             return
-        asyncio.get_event_loop().call_soon_threadsafe(
-            asyncio.create_task, self.handle()
-        )
+        self.loop.call_soon_threadsafe(asyncio.create_task, self.handle())
 
     async def handle(self):
         await asyncio.sleep(0.1)
@@ -250,7 +249,6 @@ class DBWatcher(FileSystemEventHandler):
                 grp_prof = await get_profile(cid)
                 avail_text = grp_prof.get('availability', 'None')
 
-                # build pref_text from each participant’s profile
                 participants = self.db.get_participants(cid)
                 prefs = []
                 for uid in participants:
@@ -260,7 +258,6 @@ class DBWatcher(FileSystemEventHandler):
                     prefs.append(f"{name} likes {food}")
                 pref_text = "\n".join(prefs) or 'None'
 
-                # first-time greeting
                 if not grp_prof.get('greeted'):
                     await update_profile(cid, {'greeted': True})
                     msg = await gen_group_greeting(cid)
@@ -300,13 +297,19 @@ class DBWatcher(FileSystemEventHandler):
             self.cache.set(cid, new_msgs[-1]['rowid'])
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    db=ChatDBClient(); cache=InMemoryCache()
-    for i in db.list_chats(): cache.set(i['identifier'],i['last_rowid'])
-    watcher=DBWatcher(db,cache)
-    obs=PollingObserver(); obs.schedule(watcher,str(DB_PATH.parent),recursive=False); obs.start()
+async def lifespan(app: FastAPI):
+    loop = asyncio.get_running_loop()
+    db = ChatDBClient()
+    cache = InMemoryCache()
+    for info in db.list_chats():
+        cache.set(info['identifier'], info['last_rowid'])
+    watcher = DBWatcher(db, cache, loop)
+    obs = PollingObserver()
+    obs.schedule(watcher, str(DB_PATH.parent), recursive=False)
+    obs.start()
     yield
-    obs.stop(); obs.join()
+    obs.stop()
+    obs.join()
 
 app = FastAPI(lifespan=lifespan)
 
