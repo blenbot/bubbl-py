@@ -8,6 +8,9 @@ from watchdog.observers.polling import PollingObserver
 from watchdog.events import FileSystemEventHandler
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+load_dotenv()
+from google.oauth2 import service_account
 import openai
 import uvicorn
 import logging
@@ -16,8 +19,13 @@ import re
 
 DB_PATH = Path(os.environ.get("DB_FILEPATH", "~/Library/Messages/chat.db")).expanduser()
 openai.api_key = os.environ.get("OPENAI_API_KEY")
+KEY_PATH = Path(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
+SA_CREDS = service_account.Credentials.from_service_account_file(str(KEY_PATH))
 BOT_NAME = os.environ.get("BOT_NAME", "bubbl")
-fs_client = firestore.Client()
+fs_client = firestore.Client(
+  project=os.environ["GCLOUD_PROJECT"],
+  credentials=SA_CREDS
+)
 profiles = fs_client.collection("profiles")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
