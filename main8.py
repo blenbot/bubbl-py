@@ -218,7 +218,7 @@ async def gen_private(uid: str, texts: List[str]) -> str:
         }}
 """
     resp = await openai.ChatCompletion.acreate(
-        model="GPT-4.1 mini",
+        model="gpt-4.1-mini",
         messages=[
             {"role":"system", "content": system},
             {"role":"user",   "content": last_msg}
