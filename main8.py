@@ -29,7 +29,7 @@ fs_client = firestore.Client(
   credentials=SA_CREDS
 )
 profiles = fs_client.collection("profiles")
-groups = fs_client.cllection("groups")
+groups = fs_client.collection("groups")
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost")
 redis = aioredis.from_url(os.environ["REDIS_URL"], encoding="utf-8", decode_responses=True)
@@ -181,12 +181,16 @@ async def update_profile(did: str, data: Dict):
     profiles.document(did).set(data,merge=True)
 
 async def get_group_participants(gid: str) -> List[str]:
-    doc = groups.document(gid).get()
+    doc  = groups.document(gid).get()
     data = doc.to_dict() or {}
-    return data.get("participants", {})
+    parts = data.get("participants")
+    if not parts:
+        parts = ChatDBClient().get_participants(gid)
+        groups.document(gid).set({"participants": parts}, merge=True)
+    return parts
 
-async def set_group_participants(gid:str, data: List[str]):
-    groups.document(gid).set(data, merge=True)
+async def set_group_participants(gid: str, data: List[str]):
+    groups.document(gid).set({"participants": data}, merge=True)
 
 async def set_group_state(gid:str, data: str):
     groups.document(gid).set(data, merge = True)
@@ -434,14 +438,14 @@ class DBWatcher(FileSystemEventHandler):
 FLUSH_SECONDS = 300
 
 class RedisCache:
-    def __init__(self, redis):
-        self.red = redis
-        self.timers = {}
+    def __init__(self, red: aioredis.Redis):
+        self.red = red
+        self.timers: Dict[str, asyncio.Handle] = {}
 
-    def offload_profiles(self):
+    async def offload_profiles(self):
         for doc in profiles.stream():
             did = doc.id
-            d = doc.to_dict() or {}
+            d   = doc.to_dict() or {}
             key = f"user:{did}:prefs"
             mapping = {
                 "first_name":  d.get("first_name",""),
@@ -450,8 +454,8 @@ class RedisCache:
                 "activities":  json.dumps(d.get("activities",[])),
                 "availability":d.get("availability","")
             }
-            self.red.hset(key, mapping=mapping)
-            self.red.set(f"user:{did}:state", d.get("state","none"))
+            await self.red.hset(key, mapping=mapping)
+            await self.red.set(f"user:{did}:state", d.get("state","none"))
 
     async def get_user(self, uid: str) -> Dict:
         key = f"user:{uid}:prefs"
@@ -528,8 +532,7 @@ async def lifespan(app: FastAPI):
     obs = PollingObserver()
     obs.schedule(watcher, str(DB_PATH.parent), recursive=False)
     obs.start()
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, rc.offload_profiles)
+    await rc.offload_profiles()
     yield
     obs.stop()
     obs.join()
