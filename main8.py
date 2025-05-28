@@ -430,9 +430,7 @@ class RedisCache:
         Always read the latest profile from Firestore, write it into Redis,
         and return it as a dict.
         """
-        # 1) Load from Firestore
-        prof = await get_profile(uid)  # returns Dict or {}
-        # 2) Rewrite Redis cache
+        prof = await get_profile(uid)
         key = f"user:{uid}:prefs"
         mapping = {
             "first_name":  prof.get("first_name",""),
@@ -442,7 +440,6 @@ class RedisCache:
             "availability":prof.get("availability","")
         }
         await self.red.hset(key, mapping=mapping)
-        # 3) Return the “un-serialized” version
         return {
             "first_name":  mapping["first_name"] or None,
             "food":        json.loads(mapping["food"]),
@@ -455,9 +452,7 @@ class RedisCache:
         """
         Write-through: update Firestore first, then refresh Redis cache.
         """
-        # 1) Firestore is master
         await update_profile(uid, data)
-        # 2) Refresh Redis cache from Firestore
         await self.get_user(uid)
 
     async def get_group_counter(self, gid: str) -> int:
