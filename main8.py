@@ -427,12 +427,8 @@ class DBWatcher(FileSystemEventHandler):
                 sender = new_msgs[0]["sender"]
                 rep    = await gen_private(sender, texts)
                 PrivateChatHandler(sender, rep).send_message()
-
-                m = re.search(r"call me (\w+)", new_msgs[0]['text'], re.I)
-                if m:
-                    await update_profile(cid, {'first_name': m.group(1)})
-
-            self.cache.set(cid, new_msgs[-1]['rowid'])
+                self.cache.set(cid, new_msgs[-1]['rowid'])
+                continue
 
 FLUSH_SECONDS = 300
 
@@ -479,11 +475,14 @@ class RedisCache:
             else:
                 val = json.dumps(v) if isinstance(v,(list,dict)) else v
                 await self.red.hset(pref_key, f, val)
+        await update_profile(uid, data)
         if uid in self.timers:
             self.timers[uid].cancel()
         loop = asyncio.get_running_loop()
-        self.timers[uid] = loop.call_later(FLUSH_SECONDS,
-            lambda: asyncio.create_task(self.flush(uid)) )
+        self.timers[uid] = loop.call_later(
+            FLUSH_SECONDS,
+            lambda: asyncio.create_task(self.flush(uid))
+        )
 
     async def flush(self, uid: str):
         prefs = await self.red.hgetall(f"user:{uid}:prefs")
