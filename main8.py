@@ -19,6 +19,9 @@ import re
 import redis.asyncio as aioredis
 import json
 
+PRIVATE_MODEL = os.getenv("OPENAI_PRIVATE_MODEL", "gpt-4o-mini")
+GROUP_MODEL   = os.getenv("OPENAI_GROUP_MODEL",   "gpt-4.1-mini")
+
 DB_PATH = Path(os.environ.get("DB_FILEPATH", "~/Library/Messages/chat.db")).expanduser()
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 KEY_PATH = Path(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
@@ -218,7 +221,7 @@ async def gen_private(uid: str, texts: List[str]) -> str:
         }}
 """
     resp = await openai.ChatCompletion.acreate(
-        model="gpt-4.1-mini",
+        model="gpt-4o-mini",
         messages=[
             {"role":"system", "content": system},
             {"role":"user",   "content": last_msg}
@@ -294,7 +297,7 @@ async def gen_group_master(
  7) If users mention you and ask you about your name, reply with {BOT_NAME} and ask their names BUT NEVER REVEAL that you are an AI OR you use GPT.
 """
     resp = await openai.ChatCompletion.acreate(
-        model="gpt-4o-mini",
+        model="gpt-4-turbo",
         messages=[
             {"role":"system","content": system},
             {"role":"user",  "content": last_msg}
@@ -411,10 +414,36 @@ class RedisCache:
 
     async def update_user(self, uid: str, data: Dict[str, Any]):
         """
-        Write-through: update Firestore first, then refresh Redis cache.
+        Merge & write-through:
+        - first_name replaces old
+        - food/spots/activities append onto lists (no dupes)
+        - availability appends onto string (comma-separated)
+        Then refresh Redis cache.
         """
-        await update_profile(uid, data)
-        await self.get_user(uid)
+        prof = await get_profile(uid)
+        merged: Dict[str, Any] = {}
+
+        for field, new_val in data.items():
+            if field == "first_name":
+                merged[field] = new_val
+            elif field in ("food", "spots", "activities"):
+                old_list = prof.get(field, []) or []
+                new_list = new_val if isinstance(new_val, list) else [new_val]
+                combined = old_list + [v for v in new_list if v not in old_list]
+                merged[field] = combined
+            elif field == "availability":
+                old = prof.get(field, "") or ""
+                if old:
+                    if new_val not in old:
+                        merged[field] = f"{old}, {new_val}"
+                else:
+                    merged[field] = new_val
+            else:
+                merged[field] = new_val
+
+        if merged:
+            await update_profile(uid, merged)
+            await self.get_user(uid)
 
     async def get_group_counter(self, gid: str) -> int:
         key = f"group:{gid}:counter"
