@@ -1,5 +1,5 @@
 import asyncio
-import os
+import os, httpx
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -15,12 +15,9 @@ import openai
 import uvicorn
 import logging
 from google.cloud import firestore
-import re
 import redis.asyncio as aioredis
 import json
 
-PRIVATE_MODEL = os.getenv("OPENAI_PRIVATE_MODEL", "gpt-4o-mini")
-GROUP_MODEL   = os.getenv("OPENAI_GROUP_MODEL",   "gpt-4.1-mini")
 
 DB_PATH = Path(os.environ.get("DB_FILEPATH", "~/Library/Messages/chat.db")).expanduser()
 openai.api_key = os.environ.get("OPENAI_API_KEY")
@@ -31,6 +28,10 @@ fs_client = firestore.Client(
   project=os.environ["GCLOUD_PROJECT"],
   credentials=SA_CREDS
 )
+
+GOOGLE_CSE_API_KEY = os.getenv("GOOGLE_CSE_API_KEY", "")
+GOOGLE_CSE_CX      = os.getenv("GOOGLE_CSE_CX", "")
+
 profiles = fs_client.collection("profiles")
 groups = fs_client.collection("groups")
 
@@ -46,6 +47,23 @@ INTRO_MESSAGE = (
     "PS: You can also tell me your names so I can call you by them! and share your preferences like food, activities, and favorite spots."
 )
 BUFFER_THRESHOLD = 20
+
+
+SEARCH_FN = {
+  "name": "search_web",
+  "description": "Run a web search via Google Custom Search and return the top result.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "The search query, e.g. 'best sushi in Chicago' or 'weather in Paris' or 'horror movies but not conjuring'"
+      }
+    },
+    "required": ["query"]
+  }
+}
+
 
 class ChatDBClient:
     def __init__(self, path: Path = DB_PATH):
@@ -166,6 +184,28 @@ async def get_group_state(gid:str):
     data = doc.to_dict() or {}
     return data.get("state", {})
 
+async def search_web(query: str) -> Dict[str, Any]:
+    """Call Google Custom Search API and return the top result."""
+    if not GOOGLE_CSE_API_KEY or not GOOGLE_CSE_CX:
+        return {"title":"Error","snippet":"Google CSE keys missing","link":""}
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+      "key": GOOGLE_CSE_API_KEY,
+      "cx":  GOOGLE_CSE_CX,
+      "q":   query,
+      "num": 1
+    }
+    resp = await httpx.AsyncClient().get(url, params=params)
+    items = resp.json().get("items", [])
+    if not items:
+        return {"title":"No results","snippet":"No results found","link":""}
+    item = items[0]
+    return {
+      "title":   item.get("title"),
+      "snippet": item.get("snippet"),
+      "link":    item.get("link")
+    }
+
 
 class UserState():
     async def check_state(self, cid:str):
@@ -184,7 +224,7 @@ class UserState():
 
 
 
-async def gen_private(uid: str, texts: List[str]) -> str:
+async def gen_private(uid: str, history, texts: List[str]) -> str:
     last_msg = texts[-1]
     prof = await rc.get_user(uid)
     system = f"""
@@ -203,6 +243,8 @@ async def gen_private(uid: str, texts: List[str]) -> str:
         - Comply with any “do not share” instruction from the user.
         Tone & Style:
         - Friendly, casual, under 2 sentences.
+        This is the chat history you have:
+        {history}
         Current profile (only what you’ve stored):
         first_name  = {prof.get('first_name') or 'None'}
         food        = {prof.get('food') or []}
@@ -228,7 +270,8 @@ async def gen_private(uid: str, texts: List[str]) -> str:
         12. activities would be a list of activities the user likes to do, this could include movies, games, sports, music, etc.
         13. If there are multiple preferences for one field for example food, you should capture them as a list.
         14. If the user asks you about your name, reply with {BOT_NAME} and ask their name.
-        15. Be smart
+        15. Use chat history to inform your responses, but do not hallucinate or make up personal info 
+        16. Be smart, if user requests you somethings like "recommend me a spot to hangout in a city" or "suggest me a movie to watch", you should influence the response using the data you have if required but you should use the search_web function to get the latest information and then reply with the result.
         Output _only_ JSON:
         {{
         "reply":"<text to send>",
@@ -236,22 +279,42 @@ async def gen_private(uid: str, texts: List[str]) -> str:
         }}
 """
     resp = await openai.ChatCompletion.acreate(
-        model="gpt-4o-mini",
+        model="gpt-4.1-mini",
         messages=[
             {"role":"system", "content": system},
             {"role":"user",   "content": last_msg}
         ],
+        functions=[SEARCH_FN],
+        function_call="auto",
         temperature=0.7,
-        max_tokens=200
+        max_tokens=300
     )
-    out = json.loads(resp.choices[0].message.content.strip())
-    updates = out.get("updates", {})
-    if updates:
-        await rc.update_user(uid, updates)
-    return out.get("reply", "")
+    msg = resp.choices[0].message
+    if msg.get("function_call"):
+        args = json.loads(msg.function_call.arguments)
+        result = await search_web(args["query"])
+        follow = await openai.ChatCompletion.acreate(
+          model="gpt-4o-mini",
+          messages=[
+            {"role":"system","content": system},
+            {"role":"user",  "content": last_msg},
+            msg,
+            {"role":"function","name":"search_web","content": json.dumps(result)}
+          ],
+          temperature=0.7,
+          max_tokens=300
+        )
+        final = follow.choices[0].message.content
+    else:
+        final = msg.content
+
+    
+    out = json.loads(final) if final.strip().startswith("{") else {"reply": final}
+    if out.get("updates"):
+        await rc.update_user(uid, out["updates"])
+    return out.get("reply","")
 
 async def gen_group_master(
-    gid: str,
     participants: List[str],
     history: List[str],
     last_msg: str
@@ -312,6 +375,7 @@ async def gen_group_master(
  5) Include any profile fields the user just provided under "updates".
  6) No off‐topic replies or extra keys.
  7) If users mention you and ask you about your name, reply with {BOT_NAME} and ask their names BUT NEVER REVEAL that you are an AI OR you use GPT.
+ 8) If a user asks you for a recommendation or suggestion(like "recommend me a spot to hangout in a city" or "suggest me a movie to watch"), you should influence the response using the data you have if required but you should use the search_web function to get the latest information and then reply with the result.
 """
     resp = await openai.ChatCompletion.acreate(
         model="gpt-4-turbo",
@@ -319,10 +383,34 @@ async def gen_group_master(
             {"role":"system","content": system},
             {"role":"user",  "content": last_msg}
         ],
+        functions=[SEARCH_FN],
+        function_call="auto",
         temperature=0.7,
         max_tokens=300
     )
-    return json.loads(resp.choices[0].message.content.strip())
+    msg = resp.choices[0].message
+    if msg.get("function_call"):
+        args   = json.loads(msg.function_call.arguments)
+        result = await search_web(args["query"])
+        follow = await openai.ChatCompletion.acreate(
+            model="gpt-4-turbo",
+            messages=[
+                {"role":"system",   "content": system},
+                {"role":"user",     "content": last_msg},
+                msg,
+                {
+                  "role":    "function",
+                  "name":    SEARCH_FN["name"],
+                  "content": json.dumps(result)
+                }
+            ],
+            temperature=0.7,
+            max_tokens=300
+        )
+        final = follow.choices[0].message.content
+    else:
+        final = msg.content
+    return json.loads(final.strip())
 
 
 class DBWatcher(FileSystemEventHandler):
@@ -371,12 +459,12 @@ class DBWatcher(FileSystemEventHandler):
                     if ping or planning:
                         await rc.set_attention(gid)
 
-                    n = 20 if await rc.has_attention(gid) else 5
+                    n = 50 if await rc.has_attention(gid) else 5
 
                     history_rows = self.db.get_chat_history(gid, limit=n)
                     history      = [r["text"] for r in history_rows]
 
-                    out = await gen_group_master(gid, parts, history, last)
+                    out = await gen_group_master(parts, history, last)
 
                     updates = out.get("updates", {})
                     if updates:
@@ -395,7 +483,8 @@ class DBWatcher(FileSystemEventHandler):
 
                 elif is_private:
                     sender = new_msgs[0]["sender"]
-                    rep    = await gen_private(sender, texts)
+                    history_rows = self.db.get_chat_history(cid, limit=20)
+                    rep    = await gen_private(sender, history_rows, texts)
                     PrivateChatHandler(sender, rep).send_message()
                     self.cache.set(cid, new_msgs[-1]['rowid'])
                     continue
@@ -450,12 +539,10 @@ class RedisCache:
 
         for field, new_val in data.items():
             if field == "first_name":
-                # replace outright
                 merged[field] = new_val
             elif field in ("food", "spots", "activities",
                            "restraunts", "other_considerations",
                            "allergies", "food_restrictions"):
-                # append-to-list (no duplicates)
                 old_list = prof.get(field, []) or []
                 new_list = new_val if isinstance(new_val, list) else [new_val]
                 combined = old_list + [v for v in new_list if v not in old_list]
@@ -471,7 +558,6 @@ class RedisCache:
                 merged[field] = new_val
 
         if merged:
-            # write-through to Firestore & refresh Redis
             await update_profile(uid, merged)
             await self.get_user(uid)
 
