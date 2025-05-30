@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+watchdog
+python-dotenv
+google-cloud-firestore
+google-auth
+openai="0.28.0"
+redis
+httpx
