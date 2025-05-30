@@ -309,11 +309,25 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
     else:
         final = msg.content
 
-    
-    out = json.loads(final) if final.strip().startswith("{") else {"reply": final}
-    if out.get("updates"):
-        await rc.update_user(uid, out["updates"])
-    return out.get("reply","")
+    raw = final.strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines[-1].startswith("```"):
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+
+    if raw.startswith("{") and raw.endswith("}"):
+        out: Dict[str, Any] = json.loads(raw)
+    else:
+        out = {"reply": raw}
+
+    updates = out.get("updates")
+    if isinstance(updates, dict) and updates:
+        await rc.update_user(uid, updates)
+
+    return out.get("reply", "")
 
 async def gen_group_master(
     participants: List[str],
@@ -411,7 +425,22 @@ async def gen_group_master(
         final = follow.choices[0].message.content
     else:
         final = msg.content
-    return json.loads(final.strip())
+    
+    raw = final.strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    
+    if raw.startswith("{") and raw.endswith("}"):
+        out: Dict[str, Any] = json.loads(raw)
+    else:
+        out = {"reply": raw, "respond": False, "type": "casual", "updates": {}}
+        
+    return out
 
 
 class DBWatcher(FileSystemEventHandler):
@@ -467,8 +496,8 @@ class DBWatcher(FileSystemEventHandler):
 
                     out = await gen_group_master(parts, history, last)
 
-                    updates = out.get("updates", {})
-                    if updates:
+                    updates = out.get("updates")
+                    if isinstance(updates, dict) and updates:
                         sender = new_msgs[-1]["sender"]
                         await update_profile(sender, updates)
                         await rc.update_user(sender, updates)
