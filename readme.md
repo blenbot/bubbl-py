@@ -22,8 +22,12 @@ git clone https://github.com/blenbot/bubbl-py
 ```
 
 ## 2. Enter your api keys in .env file
-open the .env in any code editor
-Populate with your very own api keys
+```
+cd bubbl-py
+'''
+A. open the .env in any code editor
+B. Populate with your very own api keys
+
 
 ## 3. Copy the bubbl.command to your desktop
 In the same terminal, copy this:

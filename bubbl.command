@@ -13,7 +13,7 @@ else
   echo "Redis already running."
 fi
 
-cd "$HOME/Desktop/bubbl" || { echo "Project folder not found"; exit 1; }
+cd "$HOME/Desktop/bubbl-py" || { echo "Project folder not found"; exit 1; }
 
 PID=$(sudo lsof -ti tcp:8080)
 if [ -n "${PID}" ]; then
