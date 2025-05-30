@@ -256,7 +256,7 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
         food restrictions = {prof.get('food_restrictions') or 'None'}
         Your goals:
         Start off the conversation naturally with greetings.
-        Do not push questions relentlessly, keep the conversation flowy and natural.
+        Do not push questions relentlessly, keep the conversation flowy and natural without srepeating the questions and don't make it awkward.
         1. If user gives any of the above fields by name, capture them.
         2. Never ask for something you already have.
         3. Ask politely—only one question at a time about missing info.
