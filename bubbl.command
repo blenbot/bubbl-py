@@ -29,7 +29,7 @@ fi
 source .venv/bin/activate
 
 echo "Installing dependencies…"
-uv pip install -r requirements.txt
+uv pip install .
 
 echo "Starting bubbl on port 8080…"
 uv run python bubbl.py
