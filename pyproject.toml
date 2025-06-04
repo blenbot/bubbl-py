@@ -1,0 +1,17 @@
+[project]
+name = "bubbl-py"
+version = "0.1.0"
+description = "Just a cool chatbot"
+readme = "README.md"
+requires-python = "==3.12.0"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "watchdog",
+    "python-dotenv",
+    "google-cloud-firestore",
+    "google-auth",
+    "openai==0.28.0",
+    "redis",
+    "httpx",
+]
