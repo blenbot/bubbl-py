@@ -17,7 +17,7 @@ import logging
 from google.cloud import firestore
 import redis.asyncio as aioredis
 import json
-
+from typing import Any, cast
 
 DB_PATH = Path(os.environ.get("DB_FILEPATH", "~/Library/Messages/chat.db")).expanduser()
 openai.api_key = os.environ.get("OPENAI_API_KEY")
@@ -173,17 +173,6 @@ async def get_group_participants(gid: str) -> List[str]:
         groups.document(gid).set({"participants": parts}, merge=True)
     return parts
 
-async def set_group_participants(gid: str, data: List[str]):
-    groups.document(gid).set({"participants": data}, merge=True)
-
-async def set_group_state(gid:str, data: str):
-    groups.document(gid).set(data, merge = True)
-
-async def get_group_state(gid:str):
-    doc = groups.document(gid).get()
-    data = doc.to_dict() or {}
-    return data.get("state", {})
-
 async def search_web(query: str) -> Dict[str, Any]:
     """Call Google Custom Search API and return the top result."""
     if not GOOGLE_CSE_API_KEY or not GOOGLE_CSE_CX:
@@ -205,23 +194,6 @@ async def search_web(query: str) -> Dict[str, Any]:
       "snippet": item.get("snippet"),
       "link":    item.get("link")
     }
-
-
-class UserState():
-    async def check_state(self, cid:str):
-        self.cid = cid
-        self.p = await get_profile(self.cid)
-        self.state = list(self.p.get("state", {}).keys())
-
-    async def set_state(self):
-        await update_profile(self.cid, {'state': {}})
-    
-    async def greeted(self):
-        await update_profile(self.cid, {'state': 'Greeted'})
-    
-    async def preferences(self):
-        await update_profile(self.cid, {'state': 'Preferences'})
-
 
 
 async def gen_private(uid: str, history, texts: List[str]) -> str:
@@ -279,7 +251,7 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
         "updates":{{/* only newly provided fields */}}
         }}
 """
-    resp = await openai.ChatCompletion.acreate(
+    resp: Any = await openai.ChatCompletion.acreate(
         model="gpt-4o",
         messages=[
             {"role":"system", "content": system},
@@ -294,7 +266,7 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
     if msg.get("function_call"):
         args = json.loads(msg.function_call.arguments)
         result = await search_web(args["query"])
-        follow = await openai.ChatCompletion.acreate(
+        follow: Any = await openai.ChatCompletion.acreate(
           model="gpt-4o-mini",
           messages=[
             {"role":"system","content": system},
@@ -392,7 +364,7 @@ async def gen_group_master(
  7) If users mention you and ask you about your name, reply with {BOT_NAME} and ask their names BUT NEVER REVEAL that you are an AI OR you use GPT.
  8) If a user asks you for a recommendation or suggestion(like "recommend me a spot to hangout in a city" or "suggest me a movie to watch"), you should influence the response using the data you have if required but you should use the search_web function to get the latest information and then reply with the result.
 """
-    resp = await openai.ChatCompletion.acreate(
+    resp: Any = await openai.ChatCompletion.acreate(
         model="gpt-4-turbo",
         messages=[
             {"role":"system","content": system},
@@ -407,7 +379,7 @@ async def gen_group_master(
     if msg.get("function_call"):
         args   = json.loads(msg.function_call.arguments)
         result = await search_web(args["query"])
-        follow = await openai.ChatCompletion.acreate(
+        follow: Any = await openai.ChatCompletion.acreate(
             model="gpt-4-turbo",
             messages=[
                 {"role":"system",   "content": system},
@@ -543,7 +515,7 @@ class RedisCache:
             "allergies":            json.dumps(prof.get("allergies",[])),
             "food_restrictions":    json.dumps(prof.get("food_restrictions",[])),
         }
-        await self.red.hset(key, mapping=mapping)
+        await cast(Any, self.red.hset(key, mapping=mapping))
         return {
             "first_name":           mapping["first_name"] or None,
             "food":                 json.loads(mapping["food"]),
@@ -607,16 +579,6 @@ class RedisCache:
         await self.red.set(f"group:{gid}:counter", c)
         groups.document(gid).set({"intro_counter": c}, merge=True)
         return c
-
-    async def add_group_buffer(self, gid: str, text: str):
-        key = f"group:{gid}:buffer"
-        await self.red.rpush(key, text)
-
-    async def get_group_buffer(self, gid: str) -> List[str]:
-        return await self.red.lrange(f"group:{gid}:buffer", 0, -1)
-
-    async def clear_group_buffer(self, gid: str):
-        await self.red.delete(f"group:{gid}:buffer")
 
     async def set_attention(self, gid: str):
         await self.red.setex(f"group:{gid}:attention", 300, "1")
