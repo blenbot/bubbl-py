@@ -1,9 +1,9 @@
 import asyncio
 import os, httpx
+from pydoc import text
 import sqlite3
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Any
 from watchdog.observers.polling import PollingObserver
 from watchdog.events import FileSystemEventHandler
 from fastapi import FastAPI
@@ -17,7 +17,7 @@ import logging
 from google.cloud import firestore
 import redis.asyncio as aioredis
 import json
-from typing import Any, cast
+from typing import Any, cast, List, Dict
 
 DB_PATH = Path(os.environ.get("DB_FILEPATH", "~/Library/Messages/chat.db")).expanduser()
 openai.api_key = os.environ.get("OPENAI_API_KEY")
@@ -46,8 +46,13 @@ INTRO_MESSAGE = (
     "Need some assistance? Just ping me with my name :)"
     "PS: You can also tell me your names so I can call you by them! and share your preferences like food, activities, and favorite spots."
 )
-BUFFER_THRESHOLD = 20
+PRIVATE_INTRO = (
+    "hey! i'm bubbl, your private chat sidekick! "
+    "i’m here to help you keep track of conversations and plan fun things with your friends! "
+    "feel free to chat one-on-one whenever you like!"
+)
 
+BUFFER_THRESHOLD = 20
 
 SEARCH_FN = {
   "name": "search_web",
@@ -64,6 +69,20 @@ SEARCH_FN = {
   }
 }
 
+GET_HISTORY_FN = {
+  "name": "get_history",
+  "description": "Fetch recent messages from the chat db",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "description": "How many of the most recent messages to return"
+      }
+    },
+    "required": ["limit"]
+  }
+}
 
 class ChatDBClient:
     def __init__(self, path: Path = DB_PATH):
@@ -225,9 +244,6 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
         restraunts/food joints = {prof.get('restraunts') or []}
         other considerations = {prof.get('other_considerations') or 'None'}
         allergies = {prof.get('allergies') or 'None'}
-        food restrictions = {prof.get('food_restrictions') or 'None'}
-        Your goals:
-        Start off the conversation naturally with greetings.
         Do not push questions relentlessly, keep the conversation flowy and natural without srepeating the questions and don't make it awkward.
         1. If user gives any of the above fields by name, capture them.
         2. Never ask for something you already have.
@@ -245,42 +261,64 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
         14. If the user asks you about your name, reply with {BOT_NAME} and ask their name.
         15. Use chat history to inform your responses, but do not hallucinate or make up personal info 
         16. Be smart, if user requests you somethings like "recommend me a spot to hangout in a city" or "suggest me a movie to watch", you should influence the response using the data you have if required but you should use the search_web function to get the latest information and then reply with the result.
+        17. If you need more context, call get_history with a limit which could be between 50 to 200 messages, this will help you make summaries and understand the context better.
+        18. If you cannot form a valid reply, output exactly <respond: "False", reply: "", updates: {{}}> and never send free‐form fallback text.
         Output _only_ JSON:
         {{
-        "reply":"<text to send>",
+        "respond": true|false   // false ⇒ do NOT send anything
+        "reply":"<text to send>",  // MUST be empty string if respond==false
         "updates":{{/* only newly provided fields */}}
         }}
-"""
+    """
+
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": system},
+        {"role": "user",   "content": last_msg}
+    ]
     resp: Any = await openai.ChatCompletion.acreate(
         model="gpt-4o",
-        messages=[
-            {"role":"system", "content": system},
-            {"role":"user",   "content": last_msg}
-        ],
-        functions=[SEARCH_FN],
+        messages=messages,
+        functions=[SEARCH_FN, GET_HISTORY_FN],
         function_call="auto",
-        temperature=0.7,
+        temperature=0.6,
         max_tokens=300
     )
-    msg = resp.choices[0].message
-    if msg.get("function_call"):
-        args = json.loads(msg.function_call.arguments)
-        result = await search_web(args["query"])
-        follow: Any = await openai.ChatCompletion.acreate(
-          model="gpt-4o-mini",
-          messages=[
-            {"role":"system","content": system},
-            {"role":"user",  "content": last_msg},
-            msg,
-            {"role":"function","name":"search_web","content": json.dumps(result)}
-          ],
-          temperature=0.7,
-          max_tokens=300
+    while True:
+        choice = resp.choices[0].message
+        fc = getattr(choice, "function_call", None)
+        if not fc:
+            break
+        name = fc.name
+        args = json.loads(fc.arguments or "{}")
+        if name == SEARCH_FN["name"]:
+            result = await search_web(args["query"])
+        elif name == GET_HISTORY_FN["name"]:
+            rows = ChatDBClient().get_chat_history(uid, limit=args["limit"])
+            texts = [r["text"] for r in rows]
+            result = {"history": texts}
+        else:
+            break
+        
+        messages.append({
+            "role": "assistant",
+            "content": None,
+            "function_call": {"name": name, "arguments": fc.arguments}
+        })
+        messages.append({
+            "role": "function",
+            "name": name,
+            "content": json.dumps(result)
+        })
+        resp = await openai.ChatCompletion.acreate(
+            model="gpt-4o",
+            messages=messages,
+            functions=[SEARCH_FN, GET_HISTORY_FN],
+            function_call="auto",
+            temperature=0.4,
+            max_tokens=300
         )
-        final = follow.choices[0].message.content
-    else:
-        final = msg.content
 
+    final = resp.choices[0].message.content or ""
     raw = final.strip()
     if raw.startswith("```"):
         lines = raw.splitlines()
@@ -293,7 +331,7 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
     if raw.startswith("{") and raw.endswith("}"):
         out: Dict[str, Any] = json.loads(raw)
     else:
-        out = {"reply": raw}
+        out = {"reply": ""}
 
     updates = out.get("updates")
     if isinstance(updates, dict) and updates:
@@ -302,6 +340,7 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
     return out.get("reply", "")
 
 async def gen_group_master(
+    gid: str,
     participants: List[str],
     history: List[str],
     last_msg: str
@@ -363,55 +402,78 @@ async def gen_group_master(
  6) No off‐topic replies or extra keys.
  7) If users mention you and ask you about your name, reply with {BOT_NAME} and ask their names BUT NEVER REVEAL that you are an AI OR you use GPT.
  8) If a user asks you for a recommendation or suggestion(like "recommend me a spot to hangout in a city" or "suggest me a movie to watch"), you should influence the response using the data you have if required but you should use the search_web function to get the latest information and then reply with the result.
+ 9) If you need more context, call get_history with a limit which could be between 50 to 200 messages, this will help you make summaries and understand the context better.
+ 10) If you cannot form a valid reply, output exactly <respond: false, type: …, reply: "", updates: {{}}> and never send free‐form fallback text.
+ Some examples:
+ Example 1:
+    User: “hey sam how are you doing?”
+    Bot: { "respond": false, "type": "casual", "reply": "", "updates": {{}} }
+
+    Example 2:
+    User: “Thanks, bye!”
+    Bot: { "respond": false, "type": "casual", "reply": "", "updates": {{}} }
+
+    Example 3:
+    User: “Schedule a hangout tomorrow morning.”
+    Bot: {
+    "respond": true,
+    "type": "plan",
+    "reply": "Sure! I see everyone’s availability is on weekends. How about Saturday at 4 pm at Blue Moon Café and then maybe bowling afterward?",
+    "updates": {{}}
+    }
+
 """
+    messages : List[Dict[str, Any]] = [
+        {"role":"system","content": system},
+        {"role":"user",  "content": last_msg}
+    ]
+    
     resp: Any = await openai.ChatCompletion.acreate(
         model="gpt-4-turbo",
-        messages=[
-            {"role":"system","content": system},
-            {"role":"user",  "content": last_msg}
-        ],
-        functions=[SEARCH_FN],
+        messages=messages,
+        functions=[SEARCH_FN, GET_HISTORY_FN],
         function_call="auto",
-        temperature=0.7,
+        temperature=0.6,
         max_tokens=300
     )
-    msg = resp.choices[0].message
-    if msg.get("function_call"):
-        args   = json.loads(msg.function_call.arguments)
-        result = await search_web(args["query"])
-        follow: Any = await openai.ChatCompletion.acreate(
+    while True:
+        choice = resp.choices[0].message
+        fc = getattr(choice, "function_call", None)
+        if not fc:
+            break
+
+        name = fc.name
+        args = json.loads(fc.arguments or "{}")
+
+        if name == SEARCH_FN["name"]:
+            result = await search_web(args["query"])
+        elif name == GET_HISTORY_FN["name"]:
+            rows = ChatDBClient().get_chat_history(gid, limit=args["limit"])
+            texts = [r["text"] for r in rows]
+            result = {"history": texts}
+        else:
+            break
+
+        messages.append({"role": "assistant", "content": None, "function_call": {"name": name, "arguments": fc.arguments}})
+        messages.append({"role": "function",  "name": name, "content": json.dumps(result)})
+
+        resp = await openai.ChatCompletion.acreate(
             model="gpt-4-turbo",
-            messages=[
-                {"role":"system",   "content": system},
-                {"role":"user",     "content": last_msg},
-                msg,
-                {
-                  "role":    "function",
-                  "name":    SEARCH_FN["name"],
-                  "content": json.dumps(result)
-                }
-            ],
-            temperature=0.7,
+            messages=messages,
+            functions=[SEARCH_FN, GET_HISTORY_FN],
+            function_call="auto",
+            temperature=0.4,
             max_tokens=300
         )
-        final = follow.choices[0].message.content
-    else:
-        final = msg.content
-    
-    raw = final.strip()
-    if raw.startswith("```"):
-        lines = raw.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        raw = "\n".join(lines).strip()
-    
-    if raw.startswith("{") and raw.endswith("}"):
-        out: Dict[str, Any] = json.loads(raw)
-    else:
-        out = {"reply": raw, "respond": False, "type": "casual", "updates": {}}
         
+    raw = resp.choices[0].message.content or ""
+    raw = raw.strip().strip("```").strip()
+    out: Dict[str, Any]
+    if raw.startswith("{") and raw.endswith("}"):
+        out = json.loads(raw)
+    else:
+        out = {"respond": False, "type": "casual", "reply": "", "updates": {}}
+
     return out
 
 
@@ -466,7 +528,7 @@ class DBWatcher(FileSystemEventHandler):
                     history_rows = self.db.get_chat_history(gid, limit=n)
                     history      = [r["text"] for r in history_rows]
 
-                    out = await gen_group_master(parts, history, last)
+                    out = await gen_group_master(gid, parts, history, last)
 
                     updates = out.get("updates")
                     if isinstance(updates, dict) and updates:
@@ -485,9 +547,17 @@ class DBWatcher(FileSystemEventHandler):
 
                 elif is_private:
                     sender = new_msgs[0]["sender"]
+
+                    if await rc.get_user_counter(sender) == 0:
+                        await rc.inc_user_counter(sender)
+                        PrivateChatHandler(sender, PRIVATE_INTRO).send_message()
+                        self.cache.set(cid, new_msgs[-1]['rowid'])
+                        continue
+
                     history_rows = self.db.get_chat_history(cid, limit=20)
-                    rep    = await gen_private(sender, history_rows, texts)
-                    PrivateChatHandler(sender, rep).send_message()
+                    rep = await gen_private(sender, history_rows, texts)
+                    if rep:
+                        PrivateChatHandler(sender, rep).send_message()
                     self.cache.set(cid, new_msgs[-1]['rowid'])
                     continue
 
@@ -585,6 +655,24 @@ class RedisCache:
 
     async def has_attention(self, gid: str) -> bool:
         return bool(await self.red.get(f"group:{gid}:attention"))
+
+    async def get_user_counter(self, uid: str) -> int:
+        key = f"user:{uid}:counter"
+        v = await self.red.get(key)
+        if v is not None:
+            return int(v)
+        doc = profiles.document(uid).get()
+        data = doc.to_dict() or {}
+        c = int(data.get("intro_counter", 0))
+        await self.red.set(key, c)
+        return c
+
+    async def inc_user_counter(self, uid: str) -> int:
+        c = await self.get_user_counter(uid) + 1
+        key = f"user:{uid}:counter"
+        await self.red.set(key, c)
+        profiles.document(uid).set({"intro_counter": c}, merge=True)
+        return c
 
 rc = RedisCache(redis)
 
