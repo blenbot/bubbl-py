@@ -1,6 +1,5 @@
 import asyncio
 import os, httpx
-from pydoc import text
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -244,7 +243,7 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
         restraunts/food joints = {prof.get('restraunts') or []}
         other considerations = {prof.get('other_considerations') or 'None'}
         allergies = {prof.get('allergies') or 'None'}
-        Do not push questions relentlessly, keep the conversation flowy and natural without srepeating the questions and don't make it awkward.
+        Do not push questions relentlessly, keep the conversation flowy and natural without repeating the questions and don't make it awkward.
         1. If user gives any of the above fields by name, capture them.
         2. Never ask for something you already have.
         3. Ask politely—only one question at a time about missing info.
@@ -262,11 +261,10 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
         15. Use chat history to inform your responses, but do not hallucinate or make up personal info 
         16. Be smart, if user requests you somethings like "recommend me a spot to hangout in a city" or "suggest me a movie to watch", you should influence the response using the data you have if required but you should use the search_web function to get the latest information and then reply with the result.
         17. If you need more context, call get_history with a limit which could be between 50 to 200 messages, this will help you make summaries and understand the context better.
-        18. If you cannot form a valid reply, output exactly <respond: "False", reply: "", updates: {{}}> and never send free‐form fallback text.
+        18. If you cannot form a valid reply rather than falling back to greetings, output something like: "Always happy to help with anything else!" or "I am sorry I cannot help with that".
         Output _only_ JSON:
         {{
-        "respond": true|false   // false ⇒ do NOT send anything
-        "reply":"<text to send>",  // MUST be empty string if respond==false
+        "reply":"<text to send>", 
         "updates":{{/* only newly provided fields */}}
         }}
     """
@@ -407,21 +405,20 @@ async def gen_group_master(
  Some examples:
  Example 1:
     User: “hey sam how are you doing?”
-    Bot: { "respond": false, "type": "casual", "reply": "", "updates": {{}} }
+    Bot: {{ "respond": false, "type": "casual", "reply": "", "updates": {{}} }}
 
     Example 2:
     User: “Thanks, bye!”
-    Bot: { "respond": false, "type": "casual", "reply": "", "updates": {{}} }
+    Bot: {{ "respond": false, "type": "casual", "reply": "", "updates": {{}} }}
 
     Example 3:
     User: “Schedule a hangout tomorrow morning.”
-    Bot: {
-    "respond": true,
-    "type": "plan",
-    "reply": "Sure! I see everyone’s availability is on weekends. How about Saturday at 4 pm at Blue Moon Café and then maybe bowling afterward?",
-    "updates": {{}}
-    }
-
+    Bot: {{ 
+       "respond": true,
+       "type": "plan",
+       "reply": "Sure! I see everyone’s availability is on weekends. How about Saturday at 4 pm at Blue Moon Café and then maybe bowling afterward?",
+       "updates": {{}} 
+    }}
 """
     messages : List[Dict[str, Any]] = [
         {"role":"system","content": system},
