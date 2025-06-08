@@ -83,6 +83,25 @@ GET_HISTORY_FN = {
   }
 }
 
+SEND_PVT_MSG_FN = {
+    "name": "send_private_message",
+    "description": "Send a private text to a user in group chat",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "sender": {
+                "type": "string",
+                "description": "The iMessage ID of the user to send the message to, e.g. +1234567890 or example@appleid.com"
+            },
+            "message": {
+                "type": "string",
+                "description": "The message text to send"
+            }
+        },
+        "required": ["sender", "message"]
+    }
+}
+
 class ChatDBClient:
     def __init__(self, path: Path = DB_PATH):
         self.conn = sqlite3.connect(str(path), check_same_thread=False)
@@ -341,7 +360,8 @@ async def gen_group_master(
     gid: str,
     participants: List[str],
     history: List[str],
-    last_msg: str
+    last_msg: str,
+    sender: str
 ) -> Dict[str, Any]:
     """
     Single GPT call that:
@@ -375,6 +395,8 @@ async def gen_group_master(
    {'\\n'.join(history)}
  - Last message:
    {last_msg}
+- sender of the text is: 
+  {sender}
 
  Your OUTPUT must be valid JSON with keys:
    "respond": true|false         // false ⇒ do NOT send anything
@@ -404,6 +426,9 @@ async def gen_group_master(
  8) If a user asks you for a recommendation or suggestion(like "recommend me a spot to hangout in a city" or "suggest me a movie to watch"), you should influence the response using the data you have if required but you should use the search_web function to get the latest information and then reply with the result.
  9) If you need more context, call get_history with a limit which could be between 50 to 200 messages, this will help you make summaries and understand the context better.
  10) If you cannot form a valid reply, output exactly <respond: false, type: …, reply: "", updates: {{}}> and never send free‐form fallback text.
+ 11) If someone pings you with your name, you should respond to the follow up messages if they are for you, for example if user says "hey {BOT_NAME} how are you doing?" and then follows up with "what are some good eating spot in LA?", you should respond to the second message with a valid response.
+ 12) The most important thing is to determine if the user is talking to you or not, if they are not talking to you, you should set respond to false and reply with an empty string otherwise form witty responses.
+ 13) If the sender of the text in group chat requests you to send a private message to them, you should use the send_private_message function with the {sender} id and the message they requested you to send. For example if the sender of the text is "+1234567890" and the message is "hey can you send me the summary of the chats in the group since morning?", you should use the send_private_message function with the sender as "+1234567890" and the message would be the summary of the chats in the group since morning(use timestamps) and send a confimation in group as a response indicating the text was sent to the user.
  Some examples:
  Example 1:
     User: “hey sam how are you doing?”
@@ -430,7 +455,7 @@ async def gen_group_master(
     resp: Any = await openai.ChatCompletion.acreate(
         model="gpt-4-turbo",
         messages=messages,
-        functions=[SEARCH_FN, GET_HISTORY_FN],
+        functions=[SEARCH_FN, GET_HISTORY_FN, SEND_PVT_MSG_FN],
         function_call="auto",
         temperature=0.6,
         max_tokens=300
@@ -450,6 +475,14 @@ async def gen_group_master(
             rows = ChatDBClient().get_chat_history(gid, limit=args["limit"])
             texts = [r["text"] for r in rows]
             result = {"history": texts}
+        elif name == SEND_PVT_MSG_FN["name"]:
+            sender = args.get("sender")
+            message = args.get("message")
+            if not sender or not message:
+                result = {"error": "Invalid sender or message"}
+            else:
+                PrivateChatHandler(sender, message).send_message()
+                result = {"status": "message sent", "sender": sender, "message": message}
         else:
             break
 
@@ -459,7 +492,7 @@ async def gen_group_master(
         resp = await openai.ChatCompletion.acreate(
             model="gpt-4-turbo",
             messages=messages,
-            functions=[SEARCH_FN, GET_HISTORY_FN],
+            functions=[SEARCH_FN, GET_HISTORY_FN, SEND_PVT_MSG_FN],
             function_call="auto",
             temperature=0.4,
             max_tokens=300
@@ -503,12 +536,14 @@ class DBWatcher(FileSystemEventHandler):
                     continue
 
                 texts      = [m['text'] for m in new_msgs]
+                sender = [m['sender'] for m in new_msgs]
                 is_group   = style == 43
                 is_private = style in (45, 1)
 
                 if is_group:
                     gid  = cid
                     last = texts[-1]
+                    sender = new_msgs[-1]['sender']
                     parts = await get_group_participants(gid)
 
                     if await rc.get_group_counter(gid) == 0:
@@ -527,7 +562,7 @@ class DBWatcher(FileSystemEventHandler):
                     history_rows = self.db.get_chat_history(gid, limit=n)
                     history      = [r["text"] for r in history_rows]
 
-                    out = await gen_group_master(gid, parts, history, last)
+                    out = await gen_group_master(gid, parts, history, last, sender)
 
                     updates = out.get("updates")
                     if isinstance(updates, dict) and updates:
