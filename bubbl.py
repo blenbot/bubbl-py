@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 load_dotenv()
-from google.oauth2 import service_account
 import openai
 import uvicorn
 import logging
@@ -17,11 +16,36 @@ from google.cloud import firestore
 import redis.asyncio as aioredis
 import json
 from typing import Any, cast, List, Dict
+import requests
+from requests.adapters import HTTPAdapter
+from google.auth.transport.requests import Request as AuthRequest
+from google.oauth2.service_account import Credentials as _BaseCreds
+import tenacity
+
+_http_session = requests.Session()
+_adapter = HTTPAdapter(
+    pool_connections=10,
+    pool_maxsize=10,
+    max_retries=3,
+    pool_block=True
+)
+_http_session.mount("https://", _adapter)
+_auth_request = AuthRequest(session=_http_session)
+
+class RetryableCredentials(_BaseCreds):
+    @tenacity.retry(
+        stop=tenacity.stop_after_attempt(5),
+        wait=tenacity.wait_exponential(min=1, max=10),
+        reraise=True
+    )
+    def refresh(self, request: AuthRequest) -> None:
+        return super().refresh(request)
 
 DB_PATH = Path(os.environ.get("DB_FILEPATH", "~/Library/Messages/chat.db")).expanduser()
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 KEY_PATH = Path(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
-SA_CREDS = service_account.Credentials.from_service_account_file(str(KEY_PATH))
+SA_CREDS = RetryableCredentials.from_service_account_file(str(KEY_PATH))
+SA_CREDS.refresh(_auth_request)
 BOT_NAME = os.environ.get("BOT_NAME", "bubbl")
 fs_client = firestore.Client(
   project=os.environ["GCLOUD_PROJECT"],
@@ -395,8 +419,8 @@ async def gen_group_master(
    {'\\n'.join(history)}
  - Last message:
    {last_msg}
-- sender of the text is: 
-  {sender}
+ - Sender of the text is:
+   {sender}
 
  Your OUTPUT must be valid JSON with keys:
    "respond": true|false         // false ⇒ do NOT send anything
