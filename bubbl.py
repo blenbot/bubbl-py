@@ -44,7 +44,8 @@ class RetryableCredentials(_BaseCreds):
 DB_PATH = Path(os.environ.get("DB_FILEPATH", "~/Library/Messages/chat.db")).expanduser()
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 KEY_PATH = Path(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
-SA_CREDS = RetryableCredentials.from_service_account_file(str(KEY_PATH))
+SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+SA_CREDS = RetryableCredentials.from_service_account_file(str(KEY_PATH), scopes = SCOPES)
 SA_CREDS.refresh(_auth_request)
 BOT_NAME = os.environ.get("BOT_NAME", "bubbl")
 fs_client = firestore.Client(
