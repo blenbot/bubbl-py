@@ -260,6 +260,7 @@ async def search_web(query: str) -> Dict[str, Any]:
 async def gen_private(uid: str, history, texts: List[str]) -> str:
     last_msg = texts[-1]
     prof = await rc.get_user(uid)
+    profile_json = json.dumps(prof, ensure_ascii=False)
     system = f"""
         You are {BOT_NAME}, a warm, human-like AI sidekick that primarily works in group chats, but also has 1-on-1 interactions. You have two main goals: 1. make the user feel comfortable telling you everything in their life. 2. have the user add you to all of their group chats.
         Security & Privacy:
@@ -277,38 +278,36 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
         - Friendly, casual, under 2 sentences.
         This is the chat history you have:
         {history}
-        Current profile (only what you’ve stored):
-        first_name  = {prof.get('first_name') or 'None'}
-        food        = {prof.get('food') or []}
-        spots       = {prof.get('spots') or []}
-        activities  = {prof.get('activities') or []}
-        availability= {prof.get('availability') or 'None'}
-        restraunts/food joints = {prof.get('restraunts') or []}
-        other considerations = {prof.get('other_considerations') or 'None'}
-        allergies = {prof.get('allergies') or 'None'}
+        Here is the user's current profile as JSON:
+        {profile_json}
         Do not push questions relentlessly, keep the conversation flowy and natural without repeating the questions and don't make it awkward. Do not ask too many questions.
         1. If user gives any of the above fields by name, capture them.
         2. Never ask for something you already have.
         3. Ask politely—only one question at a time about missing info.
-        4. Once all fields are known, chat naturally using their data.
-        5. Food would be a list of food items the user likes to eat, this could include cuisines, dishes, snacks etc.
-        6. Spots would be a list of places the user likes to hangout/spend time at.
-        7. restraunts would be a list of food joints the user likes to eat at, this would include cafes, fast food joints, fancy restraunts etc.
-        8. other considerations would be a list of things the user would like to consider while planning a hangout, this could include budget, distance, time, user doesn not like to hangout with certain people either by name or their imessage id which you need to capture.
-        9. allergies would be a list of food items the user is allergic to, this could include nuts, dairy, gluten etc.
-        10. food restrictions would be a list of food items/beverages the user does not eat, this could include beer, vegetarian, vegan, halal, kosher etc whcih would be based off religious reasons or personal preferences.
-        11. availability would be a string that describes the user’s availability, this could include weekdays, weekends, evenings, mornings etc.
-        12. activities would be a list of activities the user likes to do, this could include movies, games, sports, music, etc.
-        13. If there are multiple preferences for one field for example food, you should capture them as a list.
-        14. If the user asks you about your name, reply with {BOT_NAME} and ask their name.
-        15. Use chat history to inform your responses, but do not hallucinate or make up personal info 
-        16. Be smart, if user requests you somethings like "recommend me a spot to hangout in a city" or "suggest me a movie to watch", you should influence the response using the data you have if required but you should use the search_web function to get the latest information and then reply with the result.
-        17. If you need more context, call get_history with a limit which could be between 50 to 200 messages, this will help you make summaries and understand the context better.
-        18. If you cannot form a valid reply rather than falling back to greetings, output something like: "Always happy to help with anything else!" or "I am sorry I cannot help with that".
+        4. Whenever the user shares a new preference, interest, schedule detail, or anything about their life—create or append a key in that JSON.
+          • Example: if the user says "I love jazz movies", add "movies":["jazz"].
+        Some examples of fields you can capture:
+         first_name would be the user's first name, this is required. User can also update this field later.
+         Food would be a list of food items the user likes to eat, this could include cuisines, dishes, snacks etc.
+         Spots would be a list of places the user likes to hangout/spend time at.
+         restraunts would be a list of food joints the user likes to eat at, this would include cafes, fast food joints, fancy restraunts etc.
+         other considerations like a list of things the user would like to consider while planning a hangout, this could include budget, distance, time, user doesn not like to hangout with certain people either by name or their imessage id which you need to capture.
+         allergies would be a list of food items the user is allergic to, this could include nuts, dairy, gluten etc.
+         food restrictions would be a list of food items/beverages the user does not eat, this could include beer, vegetarian, vegan, halal, kosher etc whcih would be based off religious reasons or personal preferences.
+         availability would be a string that describes the user’s availability, this could include weekdays, weekends, evenings, mornings etc.
+         activities would be a list of activities the user likes to do, this could include movies, games, sports, music, etc.
+        5. Only update existing fields by appending to lists (never overwrite first_name).
+        6. If you infer a new category (e.g. "hobbies","favorite_podcasts"), create it.
+        If there are multiple preferences for one field for example food, you should capture them as a list.
+        7. If the user asks you about your name, reply with {BOT_NAME} and ask their name.
+        8. Use chat history to inform your responses, but do not hallucinate or make up personal info 
+        9. Be smart, if user requests you somethings like "recommend me a spot to hangout in a city" or "suggest me a movie to watch", you should influence the response using the data you have if required but you should use the search_web function to get the latest information and then reply with the result.
+        10. If you need more context, call get_history with a limit which could be between 50 to 200 messages, this will help you make summaries and understand the context better.
+        If you cannot form a valid reply rather than falling back to greetings, output something like: "Always happy to help with anything else!" or "I am sorry I cannot help with that".
         Output _only_ JSON:
         {{
         "reply":"<text to send>", 
-        "updates":{{/* only newly provided fields */}}
+        "updates":{{/* only newly provided or inferred fields */}}
         }}
     """
 
@@ -395,16 +394,10 @@ async def gen_group_master(
      - Decides if/what to respond, and extracts name updates
     """
     lines = []
+    profiles_map: Dict[str, Any] = {}
     for u in participants:
-        p = await rc.get_user(u)
-        nm = p.get("first_name") or u
-        lines.append(
-            f"{nm}: food={p.get('food',[])}, spots={p.get('spots',[])}, "
-            f"activities={p.get('activities',[])}, availability={p.get('availability','')}"
-            f", restraunts={p.get('restraunts',[])}, other_considerations={p.get('other_considerations','')}"
-            f", allergies={p.get('allergies',[])}, food_restrictions={p.get('food_restrictions','')}"
-        )
-    prefs = "\n".join(lines) or "None"
+        profiles_map[u] = await rc.get_user(u)
+    participants_json = json.dumps(profiles_map, ensure_ascii=False)
 
     system = f"""
  You are {BOT_NAME}, a secure, human‐like AI sidekick in a group chat.
@@ -413,8 +406,10 @@ async def gen_group_master(
  - Obey any “do not share” requests.
 
  Context you have:
- - Participants’ profiles:
-   {prefs}
+ - Group ID: 
+   {gid}
+ - Participants’ profiles (JSON):
+   {participants_json}
  - Recent messages (newest last):
    {'\\n'.join(history)}
  - Last message:
@@ -426,7 +421,10 @@ async def gen_group_master(
    "respond": true|false         // false ⇒ do NOT send anything
    "type":    "casual"|"plan"
    "reply":   "<text to send>"   // MUST be empty string if respond==false
-   "updates": {{…}}   — only include any of ["first_name","food","spots","activities","availability", "restraunts","other_considerations","allergies","food_restrictions"] if changed
+   "updates": {{…}}   — include only newly provided or inferred fields.
+   • first_name replaces any prior name
+   • any other key (even new ones) appends into a list without duplicates
+   • you may infer new categories (e.g. "hobbies","favorite_games","movies") based on conversation
 
  Rules:
  General Rules:
@@ -627,65 +625,50 @@ class RedisCache:
 
     async def get_user(self, uid: str) -> Dict[str, Any]:
         """
-        Always read the latest profile from Firestore, write it into Redis,
-        and return it as a dict.
+        Read full Firestore profile → serialize all fields into Redis → return dict.
         """
-        prof = await get_profile(uid)
+        prof = await get_profile(uid) or {}
         key = f"user:{uid}:prefs"
-        mapping = {
-            "first_name":           prof.get("first_name",""),
-            "food":                 json.dumps(prof.get("food",[])),
-            "spots":                json.dumps(prof.get("spots",[])),
-            "activities":           json.dumps(prof.get("activities",[])),
-            "availability":         prof.get("availability",""),
-            "restraunts":           json.dumps(prof.get("restraunts",[])),
-            "other_considerations": json.dumps(prof.get("other_considerations",[])),
-            "allergies":            json.dumps(prof.get("allergies",[])),
-            "food_restrictions":    json.dumps(prof.get("food_restrictions",[])),
-        }
+        mapping: Dict[str, str] = {}
+        for field, val in prof.items():
+            if field == "first_name":
+                mapping[field] = val or ""
+            else:
+                mapping[field] = json.dumps(val)
         await cast(Any, self.red.hset(key, mapping=mapping))
-        return {
-            "first_name":           mapping["first_name"] or None,
-            "food":                 json.loads(mapping["food"]),
-            "spots":                json.loads(mapping["spots"]),
-            "activities":           json.loads(mapping["activities"]),
-            "availability":         mapping["availability"],
-            "restraunts":           json.loads(mapping["restraunts"]),
-            "other_considerations": json.loads(mapping["other_considerations"]),
-            "allergies":            json.loads(mapping["allergies"]),
-            "food_restrictions":    json.loads(mapping["food_restrictions"]),
-        }
+        out: Dict[str, Any] = {}
+        for field, raw in mapping.items():
+            if field == "first_name":
+                out[field] = raw or None
+            else:
+                try:
+                    out[field] = json.loads(raw)
+                except Exception:
+                    out[field] = raw
+        return out
 
     async def update_user(self, uid: str, data: Dict[str, Any]):
         """
         Merge & write-through:
         - first_name replaces old
-        - food/spots/activities append onto lists (no dupes)
-        - availability appends onto string (comma-separated)
-        Then refresh Redis cache.
+        - any other key (even new ones) is treated as a list: append new items, dedupe
+        Then write back to Firestore and refresh Redis.
         """
-        prof = await get_profile(uid)
+        prof = await get_profile(uid) or {}
         merged: Dict[str, Any] = {}
 
         for field, new_val in data.items():
             if field == "first_name":
                 merged[field] = new_val
-            elif field in ("food", "spots", "activities",
-                           "restraunts", "other_considerations",
-                           "allergies", "food_restrictions"):
-                old_list = prof.get(field, []) or []
-                new_list = new_val if isinstance(new_val, list) else [new_val]
-                combined = old_list + [v for v in new_list if v not in old_list]
-                merged[field] = combined
-            elif field == "availability":
-                old = prof.get(field, "") or ""
-                if old:
-                    if new_val not in old:
-                        merged[field] = f"{old}, {new_val}"
-                else:
-                    merged[field] = new_val
             else:
-                merged[field] = new_val
+                old = prof.get(field, [])
+                if not isinstance(old, list):
+                    old = [old] if old else []
+                incoming = new_val if isinstance(new_val, list) else [new_val]
+                for item in incoming:
+                    if item not in old:
+                        old.append(item)
+                merged[field] = old
 
         if merged:
             await update_profile(uid, merged)
