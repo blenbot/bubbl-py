@@ -654,12 +654,6 @@ class RedisCache:
         return out
 
     async def update_user(self, uid: str, data: Dict[str, Any]):
-        """
-        Merge & write-through:
-        - first_name replaces old
-        - any other key (even new ones) is treated as a list: append new items, dedupe
-        Then write back to Firestore and refresh Redis.
-        """
         prof = await get_profile(uid) or {}
         merged: Dict[str, Any] = {}
 
