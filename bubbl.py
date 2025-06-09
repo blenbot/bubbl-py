@@ -182,7 +182,13 @@ class ChatDBClient:
         ORDER BY m.ROWID DESC
         LIMIT ?
         """
-        cur = self.conn.execute(sql, (identifier, limit))
+        if limit is not None:
+            sql = sql + " LIMIT ?"
+            params = (identifier, limit)
+        else:
+            sql = sql
+            params = (identifier,)
+        cur = self.conn.execute(sql, params)
         rows = [dict(r) for r in cur.fetchall()]
         return list(reversed(rows))
 
@@ -452,6 +458,7 @@ async def gen_group_master(
  11) If someone pings you with your name, you should respond to the follow up messages if they are for you, for example if user says "hey {BOT_NAME} how are you doing?" and then follows up with "what are some good eating spot in LA?", you should respond to the second message with a valid response.
  12) The most important thing is to determine if the user is talking to you or not, if they are not talking to you, you should set respond to false and reply with an empty string otherwise form witty responses.
  13) If the sender of the text in group chat requests you to send a private message to them, you should use the send_private_message function with the {sender} id and the message they requested you to send. For example if the sender of the text is "+1234567890" and the message is "hey can you send me the summary of the chats in the group since morning?", you should use the send_private_message function with the sender as "+1234567890" and the message would be the summary of the chats in the group since morning(use timestamps) and send a confimation in group as a response indicating the text was sent to the user.
+ 14) If the sender of the text in group chat requests something that requires complete chat history, for example, if a user asks you to summarize complete chat history, then only you should use the get_history function with a limit of NONE and then summarize the chat history and send it to the user in a private message using the send_private_message function otherwise keep the limit between 50 to 200 messages.
  Some examples:
  Example 1:
     User: “hey sam how are you doing?”
