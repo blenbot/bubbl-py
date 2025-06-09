@@ -590,7 +590,6 @@ class DBWatcher(FileSystemEventHandler):
                     history      = [r["text"] for r in history_rows]
 
                     out = await gen_group_master(gid, parts, history, last, sender)
-
                     updates = out.get("updates")
                     if isinstance(updates, dict) and updates:
                         sender = new_msgs[-1]["sender"]
