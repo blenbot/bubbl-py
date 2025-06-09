@@ -626,7 +626,7 @@ class RedisCache:
 
     async def get_user(self, uid: str) -> Dict[str, Any]:
         """
-        Read full Firestore profile → serialize all fields into Redis → return dict.
+        Based cache
         """
         prof = await get_profile(uid) or {}
         key = f"user:{uid}:prefs"
@@ -636,7 +636,10 @@ class RedisCache:
                 mapping[field] = val or ""
             else:
                 mapping[field] = json.dumps(val)
-        await cast(Any, self.red.hset(key, mapping=mapping))
+        if mapping:
+            await cast(Any, self.red.hset(key, mapping=mapping))
+        else:
+            await self.red.delete(key)
         out: Dict[str, Any] = {}
         for field, raw in mapping.items():
             if field == "first_name":
