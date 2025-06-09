@@ -168,7 +168,6 @@ class ChatDBClient:
           h.id    AS sender,
           m.text  AS text,
           datetime(
-            /* Cocoa timestamp (nanoseconds since 2001-01-01) to Unix epoch */
             (m.date / 1000000000.0) + strftime('%s','2001-01-01'),
             'unixepoch'
           ) AS timestamp
@@ -180,13 +179,11 @@ class ChatDBClient:
           AND m.is_from_me = 0
           AND m.text IS NOT NULL
         ORDER BY m.ROWID DESC
-        LIMIT ?
         """
         if limit is not None:
-            sql = sql + " LIMIT ?"
+            sql += " LIMIT ?"
             params = (identifier, limit)
         else:
-            sql = sql
             params = (identifier,)
         cur = self.conn.execute(sql, params)
         rows = [dict(r) for r in cur.fetchall()]
