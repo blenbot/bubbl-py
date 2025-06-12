@@ -129,8 +129,17 @@ SEND_PVT_MSG_FN = {
 
 class ChatDBClient:
     def __init__(self, path: Path = DB_PATH):
-        self.conn = sqlite3.connect(str(path), check_same_thread=False)
+        uri = f"file:{str(path)}?mode=ro&cache=shared"
+        self.conn = sqlite3.connect(
+            uri,
+            uri=True,
+            check_same_thread=False
+        )
         self.conn.row_factory = sqlite3.Row
+
+        self.conn.execute("PRAGMA journal_mode=WAL;")
+        self.conn.execute("PRAGMA read_uncommitted = TRUE;")
+
     def list_chats(self) -> List[Dict]:
         sql = """
         SELECT c.chat_identifier as identifier, c.style as style, COALESCE(MAX(m.ROWID),0) as last_rowid
@@ -287,7 +296,7 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
         1. If user gives any of the above fields by name, capture them.
         2. Never ask for something you already have.
         3. Ask politely—only one question at a time about missing info.
-        4. Whenever the user shares a new preference, interest, schedule detail, or anything about their life—create or append a key in that JSON.
+        4. Whenever the user shares a new preference, interest, schedule detail, or anything about their life — create or append a key in that JSON.
           • Example: if the user says "I love jazz movies", add "movies":["jazz"].
         Some examples of fields you can capture:
          first_name would be the user's first name, this is required. User can also update this field later.
@@ -302,7 +311,7 @@ async def gen_private(uid: str, history, texts: List[str]) -> str:
         5. Only update existing fields by appending to lists (never overwrite first_name).
         6. If you infer a new category (e.g. "hobbies","favorite_podcasts"), create it.
         If there are multiple preferences for one field for example food, you should capture them as a list.
-        7. If the user asks you about your name, reply with {BOT_NAME} and ask their name.
+        7. If the user asks you about your name, reply with {BOT_NAME}.
         8. Use chat history to inform your responses, but do not hallucinate or make up personal info 
         9. Be smart, if user requests you somethings like "recommend me a spot to hangout in a city" or "suggest me a movie to watch", you should influence the response using the data you have if required but you should use the search_web function to get the latest information and then reply with the result.
         10. If you need more context, call get_history with a limit which could be between 50 to 200 messages, this will help you make summaries and understand the context better.
