@@ -139,6 +139,8 @@ class ChatDBClient:
 
         self.conn.execute("PRAGMA journal_mode=WAL;")
         self.conn.execute("PRAGMA read_uncommitted = TRUE;")
+        self.conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
+
 
     def list_chats(self) -> List[Dict]:
         sql = """
@@ -179,6 +181,7 @@ class ChatDBClient:
           datetime(
             (m.date / 1000000000.0) + strftime('%s','2001-01-01'),
             'unixepoch'
+            'localtime'
           ) AS timestamp
         FROM message m
         JOIN chat_message_join cm ON cm.message_id = m.ROWID
