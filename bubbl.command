@@ -32,4 +32,4 @@ echo "Installing dependencies…"
 uv pip install .
 
 echo "Starting bubbl on port 8080…"
-uv run python bubbl.py
+uv run python.py
