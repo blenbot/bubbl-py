@@ -58,7 +58,7 @@ groups = fs_client.collection("groups")
 
 # Redis
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost")
-redis = aioredis.from_url(os.environ["REDIS_URL"], encoding="utf-8", decode_responses=True)
+redis = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
 
 # Logging
 logging.basicConfig(filename="bubbl.log",level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
