@@ -20,8 +20,7 @@ class DBWatcher(FileSystemEventHandler):
             return
         self.loop.call_soon_threadsafe(asyncio.create_task, self.handle())
     async def handle(self):
-        if self._lock.locked():
-            return
+    async def handle(self):
         async with self._lock:
             await asyncio.sleep(0.1)
             rc = RedisCache(redis)
