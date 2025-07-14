@@ -8,12 +8,15 @@ def _init_db_pragmas(conn):
     conn.execute("PRAGMA wal_checkpoint(FULL);")
     conn.execute("PRAGMA read_uncommitted = TRUE;")
 
+import threading
+
 class ChatDBClient:
     """
     Client for interacting with the iMessage chat database.
     Provides methods to list chats, fetch new messages, get participants, and retrieve chat history.
     """
     _pragmas_set = False
+    _pragma_lock = threading.Lock()
 
     def __init__(self, path: Path = DB_PATH):
         """
@@ -28,10 +31,21 @@ class ChatDBClient:
         )
         self.conn.row_factory = sqlite3.Row
 
-        if not ChatDBClient._pragmas_set:
-            _init_db_pragmas(self.conn)
-            ChatDBClient._pragmas_set = True
+        with ChatDBClient._pragma_lock:
+            if not ChatDBClient._pragmas_set:
+                _init_db_pragmas(self.conn)
+                ChatDBClient._pragmas_set = True
 
+    def close(self):
+        """Close the database connection."""
+        if hasattr(self, 'conn'):
+            self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
     def _chat_ids(self, identifier: str) -> List[Any]:
         """
         Return a list of ROWIDs for the chat with the given identifier.
