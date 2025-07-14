@@ -306,7 +306,8 @@ Tone & Style:
         )
         
     raw = resp.choices[0].message.content or ""
-    raw = raw.strip().strip("```").strip()
+raw = raw.strip()
+    if raw.startswith("
     out: Dict[str, Any]
     if raw.startswith("{") and raw.endswith("}"):
         out = json.loads(raw)
