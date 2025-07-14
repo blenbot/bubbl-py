@@ -14,8 +14,16 @@ async def get_group_participants(gid: str) -> List[str]:
     data = doc.to_dict() or {}
     parts = data.get("participants")
     if not parts:
-        from database import ChatDBClient
+from database import ChatDBClient
+
+async def get_group_participants(gid: str) -> List[str]:
+    doc  = groups.document(gid).get()
+    data = doc.to_dict() or {}
+    parts = data.get("participants")
+    if not parts:
         parts = ChatDBClient().get_participants(gid)
+        groups.document(gid).set({"participants": parts}, merge=True)
+    return parts
         groups.document(gid).set({"participants": parts}, merge=True)
     return parts
 
