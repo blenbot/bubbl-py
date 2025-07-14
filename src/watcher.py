@@ -31,7 +31,7 @@ class DBWatcher(FileSystemEventHandler):
                 if not new_msgs:
                     continue
                 texts      = [m['text'] for m in new_msgs]
-                sender = [m['sender'] for m in new_msgs]
+                senders    = [m['sender'] for m in new_msgs]
                 is_group   = style == 43
                 is_private = style in (45, 1)
                 if is_group:
