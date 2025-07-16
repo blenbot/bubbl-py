@@ -29,7 +29,7 @@ fi
 source .venv/bin/activate
 
 echo "Installing dependencies…"
-uv pip install .
+uv sync
 
 echo "Starting bubbl on port 8080…"
-uv run python.py
+uv run main.py

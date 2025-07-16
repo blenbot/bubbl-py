@@ -3,12 +3,13 @@ bubbl_py.egg-info
 /build
 .python-version
 __pycache__
-
+.env
+bubbl.log
+bubbl.json
 
 sample.md
 
 bubbl.py
-REFACTORING_SUMMARY.md
 
 /dist
 
